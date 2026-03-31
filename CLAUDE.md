@@ -50,6 +50,24 @@ git checkout -b <branch-name>
 
 All files are written on this branch. Do not switch branches again during the session.
 
+### Auth setup check (non-local environments only)
+
+If the chosen environment is `team2`, `team3`, `team4`, `team5`, or `play`, verify auth cookies exist **before proceeding**:
+
+```bash
+ls /Users/pranalmane/bolt/.auth/*.json 2>/dev/null | head -5
+```
+
+If no `.auth/*.json` files are found, stop and warn the user:
+
+> ⚠️ Auth files not found for **{env}**. Run this first, then re-run the agent:
+> ```bash
+> cd /Users/pranalmane/bolt
+> CI=true npx playwright test --config playwright.{env}.config.ts --project=auth
+> ```
+
+Do not continue writing tests until the user confirms auth is set up.
+
 ---
 
 ## Step 1 — Fetch the ticket (skip if input is plain text)
@@ -152,7 +170,7 @@ Only proceed to Step 2 once you can answer all of these.
 
 ### Test cases
 | # | Name | Type | Priority | Steps | Expected result |
-|---|------|------|----------|-------|-----------------|
+|---|------|------|----------|-------|---------------|
 | TC-1 | {name} | Happy path | High | 1. ... 2. ... | ... |
 | TC-2 | {name} | Edge case | Medium | 1. ... 2. ... | ... |
 | TC-3 | {name} | Error state | Medium | 1. ... 2. ... | ... |
@@ -163,8 +181,6 @@ Only proceed to Step 2 once you can answer all of these.
 ```
 
 At minimum include: one happy path (High priority), at least one edge case, at least one error state.
-
----
 
 ---
 
@@ -185,7 +201,7 @@ If the ticket has explicit test cases listed, use those exactly. If not, infer f
 
 Before writing a single line of code, scan the entire bolt project for existing coverage.
 
-### 5a — Search for existing tests covering the same scenarios
+### 4a — Search for existing tests covering the same scenarios
 
 Search for keywords from the ticket summary and test case names across all spec files:
 
@@ -196,7 +212,7 @@ grep -r "{test case name or flow description}" /Users/pranalmane/bolt/playwright
 
 Run at least 3 targeted searches using different keywords (feature name, flow name, component name).
 
-### 5b — Evaluate each match
+### 4b — Evaluate each match
 
 For every file found, read it and check:
 - Does it test the **same user flow** as any of your planned test cases?
@@ -204,23 +220,23 @@ For every file found, read it and check:
 
 If yes → that test case is **already covered**. Remove it from your list and do NOT rewrite it.
 
-### 5c — Rules about existing files
+### 4c — Rules about existing files
 
 | Situation | What to do |
-|-----------|-----------|
+|-----------|----------|
 | Spec file for this exact feature already exists | Add new test cases to it ONLY if they are genuinely new. Never modify or delete existing tests. |
 | Existing test covers the same flow but is skipped (`test.skip()`) | Do NOT duplicate it. Note it in the summary as "already exists but skipped". |
 | Existing POM already has the locators/methods you need | Reuse it — do NOT create a duplicate POM. |
 | No overlap found | Create a new spec file. |
 
-### 5d — Report before writing
+### 4d — Report before writing
 
 Print a short duplicate report:
 
 ```
 ## Duplicate check
 | Planned test case | Status |
-|-------------------|---------|
+|-------------------|--------|
 | TC-1: {name} | ✅ New — will write |
 | TC-2: {name} | ⚠️ Already covered in playwright/onboarding/foo.spec.ts:42 — skipping |
 | TC-3: {name} | ⚠️ Exists but skipped in playwright/application/bar.spec.ts:67 — skipping |
@@ -334,6 +350,43 @@ Runner.builder<{ /* shape of bootstrapData */ }>()
 | `.critical()` | Shorthand for Tags.CRITICAL |
 | `.withFeatureFlagsEnabled([flags])` | Enable specific feature flags |
 
+### When to use optional Runner methods
+
+**.onMobileDevice()** — Add alongside `.onDesktopDevice()` when:
+- The ticket mentions mobile, responsive layout, or a mobile-specific route
+- The feature has different UI at < 768px (check the component's responsive classes)
+- Example: `Runner.builder().onDesktopDevice().onMobileDevice()...`
+
+**.isFlaky()** — Add when the test involves:
+- Email/SMS delivery workflows (external timing)
+- Third-party OAuth or payment redirects
+- Known race conditions noted in the ticket comments
+- Sets retries to 3 automatically — do not use this as a substitute for proper waiting
+
+**.forApiTests()** — Use instead of `.onDesktopDevice()` when:
+- The test validates an API response only (no UI interaction needed)
+- The ticket is purely backend (e.g. validating a webhook, a batch job result)
+- Pattern:
+```typescript
+Runner.builder<{ transactionId: string }>()
+  .tags(Tags.TRANSACTION)
+  .forApiTests()
+  .asUSAgent()
+  .bootstrap(async ({ request, userCredentials }) => {
+    // use `request` (Playwright APIRequestContext) instead of `page`
+    const res = await request.get('/api/transactions');
+    return { transactionId: res.json().id };
+  })
+  .run('transaction-api', async ({ test }) => {
+    test('returns 200 with correct shape', async ({ request, bootstrapData }) => {
+      const res = await request.get(`/api/transactions/${bootstrapData.transactionId}`);
+      expect(res.status()).toBe(200);
+      const body = await res.json();
+      expect(body).toHaveProperty('id');
+    });
+  });
+```
+
 ### Tags reference
 
 | Feature area | Tag |
@@ -411,15 +464,29 @@ export class FeatureNamePage extends AbstractPage {
 
 ---
 
-## Step 9 — Lint and format
+## Step 9 — Lint, format, and type-check
+
+Run in this order:
 
 ```bash
 cd /Users/pranalmane/bolt
-yarn lint playwright/{feature}/{name}.spec.ts playwright/pages/{feature}/{Name}Page.ts
-yarn prettier playwright/{feature}/{name}.spec.ts playwright/pages/{feature}/{Name}Page.ts
+
+# 1. Auto-fix formatting
+yarn prettier --write playwright/{feature}/{name}.spec.ts playwright/pages/{feature}/{Name}Page.ts
+
+# 2. Lint (may auto-fix some issues)
+yarn lint --fix playwright/{feature}/{name}.spec.ts playwright/pages/{feature}/{Name}Page.ts
+
+# 3. TypeScript check — catches type errors lint won't catch
+yarn tsc --noEmit
 ```
 
-Fix any lint errors before finalising.
+**Retry rule:** If lint or tsc reports errors, fix them and re-run the failing command. Repeat up to **3 times**. If errors remain after 3 attempts, stop and report the exact error to the user — do not continue to Step 10.
+
+**Before moving on, confirm:**
+- `yarn prettier` exits 0
+- `yarn lint` exits 0 with no errors (warnings are acceptable)
+- `yarn tsc --noEmit` exits 0
 
 ---
 
@@ -474,6 +541,36 @@ Always print the full command with the spec file path at the end of your summary
 
 ---
 
+## Network interception — error state tests
+
+When writing error-state test cases (e.g. "API returns 500", "network timeout"), use `page.route()` to mock the response **instead of relying on real failures**:
+
+```typescript
+test('shows error banner when API fails', async ({ page, bootstrapData }) => {
+  const featurePage = new FeatureNamePage(page);
+
+  // Intercept the specific API call and force a 500
+  await page.route('**/api/transactions/**', (route) =>
+    route.fulfill({ status: 500, body: JSON.stringify({ error: 'Internal Server Error' }) })
+  );
+
+  await featurePage.navigate();
+  await featurePage.triggerAction();
+
+  await expect(featurePage.errorBanner).toBeVisible();
+  await expect(featurePage.errorBanner).toContainText(/something went wrong/i);
+});
+```
+
+**Rules for route interception:**
+- Always use `**/path/**` glob patterns — never hardcode the full base URL
+- Intercept only the single call relevant to the test — do not broad-block all requests
+- Call `page.route()` **before** `page.goto()` or the action that triggers the request
+- Use `route.abort()` for network timeout simulation; `route.fulfill()` for HTTP error codes
+- Add the `errorBanner` locator to the POM constructor, not inline
+
+---
+
 ## Assertions quick reference
 
 ```typescript
@@ -494,9 +591,12 @@ await page.waitForURL(/new-route/);
 ## Hard rules — never break these
 
 - Never import `test` directly from `@playwright/test` — always use the `Runner` pattern
+- Never use `test.only()` — it silently skips all other tests in CI and will cause failures in the pipeline
+- Never use `test.describe()` — the Runner `.run()` block is the grouping mechanism; describe blocks conflict with it
 - Never use `page.locator('text=...')` — use `getByText()` or `getByRole()`
 - Never hardcode base URLs — use relative paths (`/transactions`)
 - Never use `page.waitForTimeout()` — use Playwright-native waiting
 - Never put locators inside test methods — always in the POM constructor
 - Always keep `.bootstrap()` even if it returns `undefined`
 - Always `await` Playwright actions and assertions
+- Never use `page.route()` with a hardcoded full URL — always use a glob pattern (`**/api/path/**`)
