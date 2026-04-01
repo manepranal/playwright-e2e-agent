@@ -50,6 +50,8 @@ git checkout -b <branch-name>
 
 All files are written on this branch. Do not switch branches again during the session.
 
+**Once you have the user's Step 0 answers, run the branch checkout AND Step 1 ticket fetch in parallel — they are independent.**
+
 ### Auth setup check (non-local environments only)
 
 If the chosen environment is `team2`, `team3`, `team4`, `team5`, or `play`, verify auth cookies exist **before proceeding**:
@@ -72,10 +74,11 @@ Do not continue writing tests until the user confirms auth is set up.
 
 ## Step 1 — Fetch the ticket (skip if input is plain text)
 
+**Run all three calls in parallel — do not wait for one before starting the next:**
 ```
-mcp__realtrack__youtrack_issue_find  →  ticket ID
-mcp__realtrack__youtrack_issue_links →  sub-issues / linked tickets
-mcp__realtrack__youtrack_issue_comments → existing comments (look for existing test plan)
+mcp__realtrack__youtrack_issue_find     →  ticket ID
+mcp__realtrack__youtrack_issue_links    →  sub-issues / linked tickets
+mcp__realtrack__youtrack_issue_comments →  existing comments (look for existing test plan)
 ```
 
 Read:
@@ -93,6 +96,8 @@ For epics with many sub-tickets: generate **one spec file per logical feature ar
 Before writing any test plan or code, you must understand how the feature actually works. Read the source code.
 
 ### What to look for
+
+**Run all four grep groups in parallel — fire them all at once, then read the results:**
 
 **1. Find the UI components**
 ```bash
@@ -128,6 +133,8 @@ grep -r "{feature keyword}" /Users/pranalmane/bolt/playwright/utils --include="*
 grep -r "{feature keyword}" /Users/pranalmane/bolt/playwright/pages --include="*.ts" -l
 ```
 Reuse existing Tasks, utils, and POMs wherever possible — never duplicate them.
+
+> **Parallel execution tip:** Issue all grep commands above simultaneously. Do not wait for group 1 to finish before starting group 2. Synthesize all results together once they all return.
 
 ### What to extract
 
@@ -170,7 +177,7 @@ Only proceed to Step 2 once you can answer all of these.
 
 ### Test cases
 | # | Name | Type | Priority | Steps | Expected result |
-|---|------|------|----------|-------|---------------|
+|---|------|------|----------|-------|-----------------|
 | TC-1 | {name} | Happy path | High | 1. ... 2. ... | ... |
 | TC-2 | {name} | Edge case | Medium | 1. ... 2. ... | ... |
 | TC-3 | {name} | Error state | Medium | 1. ... 2. ... | ... |
@@ -203,14 +210,17 @@ Before writing a single line of code, scan the entire bolt project for existing 
 
 ### 4a — Search for existing tests covering the same scenarios
 
-Search for keywords from the ticket summary and test case names across all spec files:
+Search for keywords from the ticket summary and test case names across all spec files.
+**Run all searches in parallel — do not run them one at a time:**
 
 ```bash
-grep -r "{keyword from ticket}" /Users/pranalmane/bolt/playwright --include="*.spec.ts" -l
-grep -r "{test case name or flow description}" /Users/pranalmane/bolt/playwright --include="*.spec.ts" -l
+# Fire all three simultaneously:
+grep -r "{feature name keyword}" /Users/pranalmane/bolt/playwright --include="*.spec.ts" -l
+grep -r "{flow name keyword}" /Users/pranalmane/bolt/playwright --include="*.spec.ts" -l
+grep -r "{component name keyword}" /Users/pranalmane/bolt/playwright --include="*.spec.ts" -l
 ```
 
-Run at least 3 targeted searches using different keywords (feature name, flow name, component name).
+Use at least 3 different keywords (feature name, flow name, component name). Synthesize results once all three return.
 
 ### 4b — Evaluate each match
 
@@ -223,7 +233,7 @@ If yes → that test case is **already covered**. Remove it from your list and d
 ### 4c — Rules about existing files
 
 | Situation | What to do |
-|-----------|----------|
+|-----------|-----------|
 | Spec file for this exact feature already exists | Add new test cases to it ONLY if they are genuinely new. Never modify or delete existing tests. |
 | Existing test covers the same flow but is skipped (`test.skip()`) | Do NOT duplicate it. Note it in the summary as "already exists but skipped". |
 | Existing POM already has the locators/methods you need | Reuse it — do NOT create a duplicate POM. |
@@ -273,6 +283,13 @@ Before writing, quickly check if a spec file for this feature already exists —
 ## Step 6 — Read one nearby spec for local style
 
 Before writing, read one existing `.spec.ts` in the same feature folder (or the closest parent folder) to confirm any local conventions, then match that style exactly.
+
+---
+
+## Steps 7 + 8 — Write spec and POM in parallel
+
+**Write the `.spec.ts` and the POM class at the same time — they do not depend on each other.**
+Start both writes simultaneously, then move on to Step 9 once both are complete.
 
 ---
 
@@ -466,18 +483,19 @@ export class FeatureNamePage extends AbstractPage {
 
 ## Step 9 — Lint, format, and type-check
 
-Run in this order:
+Run in two phases:
 
+**Phase A — run prettier and lint in parallel:**
 ```bash
 cd /Users/pranalmane/bolt
 
-# 1. Auto-fix formatting
+# Run both simultaneously:
 yarn prettier --write playwright/{feature}/{name}.spec.ts playwright/pages/{feature}/{Name}Page.ts
-
-# 2. Lint (may auto-fix some issues)
 yarn lint --fix playwright/{feature}/{name}.spec.ts playwright/pages/{feature}/{Name}Page.ts
+```
 
-# 3. TypeScript check — catches type errors lint won't catch
+**Phase B — run tsc after Phase A completes** (tsc must see the lint-fixed files):
+```bash
 yarn tsc --noEmit
 ```
 
@@ -492,8 +510,10 @@ yarn tsc --noEmit
 
 ## Step 10 — Create YouTrack test cases (only when ticket ID was provided)
 
-For each test case you wrote, create a sub-issue in YouTrack:
+**Create all sub-issues in parallel — do not create them one at a time.**
+Fire one `mcp__realtrack__youtrack_issue_create` call per test case simultaneously, then once all IDs are returned, fire all `mcp__realtrack__youtrack_issue_comment` and `mcp__realtrack__youtrack_issue_links` calls in parallel.
 
+Per test case:
 1. `mcp__realtrack__youtrack_issue_create` — type: "Test", summary matches the test name
 2. `mcp__realtrack__youtrack_issue_comment` — add a comment with the spec file path and the test name
 3. Link the sub-issue to the parent ticket via `mcp__realtrack__youtrack_issue_links`
